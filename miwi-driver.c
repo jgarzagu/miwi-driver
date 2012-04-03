@@ -2,10 +2,15 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>
+#include <mach/gpio.h>
 
 #define DEVICE_NAME "Miwi driver"
 
-//Me quede en: 
+/* GPIO pins for the LEDs */
+#define BEAGLE_LED_USR0	149
+#define BEAGLE_LED_USR1	150
+
+//TODO: 
 //Agregar dinamicamente el registro del major number y los FileOperations.
 //Aprender como se agrega el MKNOD cada vez que se carga el driver.
 //Aprender que se debe de hacer con loff_t *pos en write y read
@@ -34,8 +39,8 @@ static struct file_operations hellodr_fops = {
 
 
 static dev_t hellodr_dev_number; //Device Major number variable
-int major_number = 251; //Major number (!EREASE THIS WHEN DO ALLOCATE REGISTER)
-
+int major_number = 24; //Major number (!EREASE THIS WHEN DO ALLOCATE REGISTER)
+int gpio_requested = 0; //Requested GPIO
 
 
 //#### LOADING AND UNLOADING DEVICE DRIVER OPERATIONS
@@ -58,6 +63,13 @@ static int __init miwi_init(void){
 	if (register_chrdev(major_number,DEVICE_NAME,&hellodr_fops) < 0) {
 		printk(KERN_DEBUG "Miwi: Can't register device\n");
 		return -1;
+	}
+
+	if (!gpio_request(BEAGLE_LED_USR1, "")) {
+		gpio_direction_output(BEAGLE_LED_USR1, 1);
+		gpio_requested = 1;
+	}else{
+		printk(KERN_DEBUG "Miwi: Fail to request GPIO");
 	}
 
 	
@@ -117,6 +129,21 @@ miwi_write(struct file *file, const char *buf, size_t count, loff_t *pos)
 	char data;
 	ret= copy_from_user(&data,buf,1)? -EFAULT:1; //Copy one byte form user space to kernel space
 	printk(KERN_DEBUG "Miwi: Write %c\n", data);
+
+	//TURN ON OR OFF THE LED.
+	if(gpio_requested){
+		if(data == '0'){
+			gpio_set_value(BEAGLE_LED_USR1, 0);
+			printk(KERN_DEBUG "Miwi: LED OFF");
+		}else if(data == '1'){
+			gpio_set_value(BEAGLE_LED_USR1, 1);
+			printk(KERN_DEBUG "Miwi: LED ON");
+		}
+			
+	}else{
+		printk(KERN_DEBUG "Miwi: Write not avilable due to FAIL request");
+	}
+
 	return ret;
 }
 
