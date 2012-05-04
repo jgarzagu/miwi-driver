@@ -26,15 +26,14 @@
 
 //TODO:
 //Se va a usar el McSPI3 (Juntar pines 17 y 19)
-//Ver por que no puedo usar pointers en el char data de Read-> marca (ERROR) (para poder escribir m'as de un caracter)
 //Ver para que sirve filp->private_data que se usa en los reads y writes.
 //Ver por que usar Kmalloc para los apuntadores que se pasan al user data y usarlo !!IMPORTANTE
 //Aprender sobre Device Classes, Libro LDD pag. 385
 //Falta: Agregar los fail1, fail2, en el __init para destruir el cdev, class, etc en caso de que falle.
 //Quitar los comentarios con // y ponerlos con /**/
 //Ver si u8 o char...
-//Hoy: Me quede en agregar los pines en el U-boot y ver si funciona el SPI. (Juntar los cables de SPI_IN y SPI_OUT)
-//	Con el cat /dev/miwi hay un OOps error que parece es en la transferencia de apuntadores.
+//Hoy: Continuar a mandar el formato para escritura de datos en el SPI y ver como hacerle para saber cuando leer.
+//      Quiza con un iqr en una linea. McSPI ya funciona. Tambien ver si utilizar ioctl's.
 
 /*Protoypes*/
 
@@ -207,10 +206,9 @@ static void __exit miwi_exit(void){
 
 	if (miwi_data.rx_buff)
 		kfree(miwi_data.rx_buff);
-	/*
+
 	if (miwi_dev.udata)
 		kfree(miwi_dev.udata);			//Created with kmalloc()
-	*/
 
 	/* OLD WAY OF UNREGISTERING */
 	//unregister_chrdev(<some_major_number>,DEVICE_NAME);	
@@ -365,13 +363,11 @@ miwi_open(struct inode *inode, struct file *file)
 	printk(KERN_DEBUG "Miwi: open file\n");
 
 	//Allocate user data
-	/*
 	if (!miwi_dev.udata) {
 		miwi_dev.udata = kmalloc(USER_BUFF_SIZE, GFP_KERNEL);
 		if (!miwi_dev.udata) 
 			status = -ENOMEM;
 	}
-	*/
 	return status;
 }
 
