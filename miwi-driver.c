@@ -27,7 +27,6 @@
 //TODO:
 //Se va a usar el McSPI3 (Juntar pines 17 y 19)
 //Ver para que sirve filp->private_data que se usa en los reads y writes.
-//Ver por que usar Kmalloc para los apuntadores que se pasan al user data y usarlo !!IMPORTANTE
 //Aprender sobre Device Classes, Libro LDD pag. 385
 //Falta: Agregar los fail1, fail2, en el __init para destruir el cdev, class, etc en caso de que falle.
 //Quitar los comentarios con // y ponerlos con /**/
@@ -67,7 +66,6 @@ static struct _miwi_dev {
 	struct class *class;			/*Driver class*/
 	struct spi_device *miwi_spi_device;	/*SPI device struct to save struct returned by Master SPI driver*/
 	struct semaphore spi_sem;		/*Semaphore for SPI */
-	char *udata;				/*User data buffer*/
 } miwi_dev;
 
 //SPI structure for registering our driver to the "Master SPI Controller driver" -> (omap2_mcspi driver)
@@ -90,6 +88,7 @@ static struct _miwi_data {
 
 int gpio_requested=0;
 u8 random_data=0;
+
 
 /* LOADING AND UNLOADING DEVICE DRIVER OPERATIONS */
 
@@ -207,9 +206,6 @@ static void __exit miwi_exit(void){
 	if (miwi_data.rx_buff)
 		kfree(miwi_data.rx_buff);
 
-	if (miwi_dev.udata)
-		kfree(miwi_dev.udata);			//Created with kmalloc()
-
 	/* OLD WAY OF UNREGISTERING */
 	//unregister_chrdev(<some_major_number>,DEVICE_NAME);	
 }
@@ -283,7 +279,7 @@ static int __init add_miwi_device_to_bus(void)
 	return status;
 }
 
-static int miwi_spi_transfer_message(void)
+static int miwi_spi_transfer_message(char * msg_data, size_t len)
 {
 	int status;
 
@@ -298,22 +294,23 @@ static int miwi_spi_transfer_message(void)
 	/* Init SPI sata to transfer */	
 	spi_message_init(&miwi_data.msg);
 
-	/* put some changing values in tx_buff for testing */	
-	miwi_data.tx_buff[0] = random_data++;
-	miwi_data.tx_buff[1] = random_data++;
-	miwi_data.tx_buff[2] = random_data++;
-	miwi_data.tx_buff[3] = random_data++;
+	/* put information in tx_buff */	
+	miwi_data.tx_buff = msg_data;
 
 	memset(miwi_data.rx_buff, 0, SPI_BUFF_SIZE);
 
+	/* Give allocation pointer in transfer structure */ 
 	miwi_data.transfer.tx_buf = miwi_data.tx_buff;
 	miwi_data.transfer.rx_buf = miwi_data.rx_buff;
-	miwi_data.transfer.len = 4;
+	miwi_data.transfer.len = len;
 
 	spi_message_add_tail(&miwi_data.transfer, &miwi_data.msg);
 
 	/* Finally send the data to Master SPI driver. It will wait until completion*/
 	status = spi_sync(miwi_dev.miwi_spi_device, &miwi_data.msg);
+
+	/* Give to Rx buffer a null character */
+	miwi_data.rx_buff[len] = '\0';
 
 	up(&miwi_dev.spi_sem);
 
@@ -358,84 +355,103 @@ return 0;
 static int
 miwi_open(struct inode *inode, struct file *file)
 {
-	int status = 0; 
 
 	printk(KERN_DEBUG "Miwi: open file\n");
-
-	//Allocate user data
-	if (!miwi_dev.udata) {
-		miwi_dev.udata = kmalloc(USER_BUFF_SIZE, GFP_KERNEL);
-		if (!miwi_dev.udata) 
-			status = -ENOMEM;
-	}
-	return status;
+	return 0;
 }
 
 static int
 miwi_close(struct inode *inode, struct file *file)
 {
-	printk(KERN_DEBUG "Miwi: close file\n");
+	printk(KERN_DEBUG "Miwi: close file\n");		
 	return 0;
 }
 
 static ssize_t
 miwi_read(struct file *file, char __user *buff, size_t count, loff_t *pos)
 {
-	int ret;
-
+	int ret, value;
+	char *udata;
+	size_t len;
+	
 	printk(KERN_DEBUG "Miwi: read\n");
 
-	/* SPI Write and Read */
-	ret= miwi_spi_transfer_message();
+	//Allocate data to user
+	udata = kmalloc(USER_BUFF_SIZE, GFP_KERNEL);
+	if (!udata) 
+		return -ENOMEM;
 
-	if (ret) {
-		sprintf(miwi_dev.udata, 
-			"spike_do_one_message failed : %d\n",
-			ret);
-	}
-	else {
-		sprintf(miwi_dev.udata, 
-			"Status: %d\nTX: %d %d %d %d\nRX: %d %d %d %d\n",
-			miwi_data.msg.status,
-			miwi_data.tx_buff[0], miwi_data.tx_buff[1], 
-			miwi_data.tx_buff[2], miwi_data.tx_buff[3],
-			miwi_data.rx_buff[0], miwi_data.rx_buff[1], 
-			miwi_data.rx_buff[2], miwi_data.rx_buff[3]);
+
+	//TURN ON OR OFF THE LED.
+	if(gpio_requested){
+
+		value = gpio_get_value(BEAGLE_LED_USR1);
+		if(value){
+			gpio_set_value(BEAGLE_LED_USR1, 0);
+			sprintf(udata, "Miwi:LED_OFF,%d\n", value);
+
+		}else{
+			gpio_set_value(BEAGLE_LED_USR1, 1);
+			sprintf(udata, "Miwi:LED_ON,%d\n", value);
+		}		
+	}else{
+		sprintf(udata, "Miwi: Write not avilable due to FAIL request");
 	}
 
-	ret= copy_to_user(buff, miwi_dev.udata, strlen(miwi_dev.udata))?-EFAULT:strlen(miwi_dev.udata);
+	len = strlen(udata);
+
+	ret= copy_to_user(buff, udata, len)?-EFAULT:len;
+
+	printk("Size is##### = %d", strlen(udata));
 
 	//Just when reading from $cat, it continues until return 0 and position is grater than 0.
-	if(*pos==0){ //If the postion is at 0 (First time to read)
+	if(*pos==0) //If the postion is at 0 (First time to read)
 		*pos+=ret;
-		return ret;
-	}else{
-		return 0;
-	}
+	else
+		ret = 0;
+
+	kfree(udata);
+	return ret;
 }
 
 static ssize_t
 miwi_write(struct file *file, const char __user *buff, size_t count, loff_t *pos)
 {
-	int ret;
-	char data;
-	ret=copy_from_user(&data, buff, 1)? -EFAULT:1; //Copy one byte form user space to kernel space
-	printk(KERN_DEBUG "Miwi: Write %c\n", data);
+	int retval, ret;
+	char *udata;
+	
+	printk(KERN_DEBUG "Miwi: Write \n");
 
-	//TURN ON OR OFF THE LED.
-	if(gpio_requested){
-		if(data == '0'){
-			gpio_set_value(BEAGLE_LED_USR1, 0);
-			printk(KERN_DEBUG "Miwi: LED OFF");
-		}else if(data == '1'){
-			gpio_set_value(BEAGLE_LED_USR1, 1);
-			printk(KERN_DEBUG "Miwi: LED ON");
-		}		
-	}else{
-		printk(KERN_DEBUG "Miwi: Write not avilable due to FAIL request");
+	if (count > USER_BUFF_SIZE) 
+		count= USER_BUFF_SIZE;
+	
+	/*Allocate user buffer*/
+	udata = kmalloc(count, GFP_KERNEL);
+	if (!udata) 
+		return -ENOMEM;
+
+	/*Copy data form user space to kernel space*/
+	retval =copy_from_user(udata, buff, count)? -EFAULT:count;
+
+	/*Add null character to data (!WARNING, Resolve this error...)*/
+	udata[count]= '\0';
+	
+	printk(KERN_DEBUG "Miwi: You said: %s, length= %d, count=%d", udata, strlen(udata), count);
+	
+	/* SPI Write and Read */	
+	ret= miwi_spi_transfer_message(udata, count);
+
+	if (ret) {
+		printk(KERN_DEBUG "Miwi: miwi_spi_transfer message failed : %d\n",ret);
+	}
+	else {
+		printk(KERN_DEBUG "Miwi: Status: %d\nMiwi: TX: %s\nMiwi: RX: %s\n",
+			miwi_data.msg.status,miwi_data.tx_buff,miwi_data.rx_buff);
 	}
 
-	return ret;
+
+	kfree(udata);
+	return retval;
 }
 
 
