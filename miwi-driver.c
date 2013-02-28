@@ -14,18 +14,21 @@
 #define SPI_BUFF_SIZE	16
 #define USER_BUFF_SIZE	128	//Max. Limit it to 4096
 
-/* GPIO pins for the LEDs */
+/* GPIO pins */
 #define BEAGLE_LED_USR0	149
 #define BEAGLE_LED_USR1	150
+#define BEAGLE_GPIO_137 137
+#define BEAGLE_GPIO_141 141
 
 /* SPI */
-#define SPI_BUS 3		//SPI BUS NUMBER (McSPI#) e.g(McSPI1, McSPI2,..., McSPI4) 
-#define SPI_BUS_CS1 1		//SPI CHIP SELECT (CS#) SPI bus can have more than one CS, e.g (CS0, CS1)
-#define SPI_BUS_SPEED 1000000	//SPI BUS SPEED in Hertz
+#define SPI_BUS 4		//SPI BUS NUMBER (McSPI#) e.g(McSPI1, McSPI2,..., McSPI4) 
+#define SPI_BUS_CS1 0		//SPI CHIP SELECT (CS#) SPI bus can have more than one CS, e.g (CS0, CS1)
+#define SPI_BUS_SPEED 10000	//SPI BUS SPEED in Hertz
+
 
 
 //TODO:
-//Se va a usar el McSPI3 (Juntar pines 17 y 19)
+//McSPI3 (Juntar pines 17 y 19), McSPI4 (Juntar pines 12 y 18)
 //Ver para que sirve filp->private_data que se usa en los reads y writes.
 //Aprender sobre Device Classes, Libro LDD pag. 385
 //Falta: Agregar los fail1, fail2, en el __init para destruir el cdev, class, etc en caso de que falle.
@@ -86,7 +89,6 @@ static struct _miwi_data {
 	u8 *rx_buff;
 }miwi_data;
 
-int gpio_requested=0;
 u8 random_data=0;
 
 
@@ -138,14 +140,29 @@ static int __init miwi_init(void){
 		return -1;
 	} //Note: you can put in device_create (...,NULL,"miwi%d",1,...) etc to have more numbers like tty1, tty2, etc.
 
-	//Beagleboard GPIO requests
+	//Beagleboard GPIO requests USR1
 	if (!gpio_request(BEAGLE_LED_USR1, "")) {
 		gpio_direction_output(BEAGLE_LED_USR1, 0);
-		gpio_requested = 1;
 	}else{
 		printk(KERN_DEBUG "Miwi: Fail to request GPIO\n");
 	}
 
+/*
+	//Beagleboard GPIO requests 137
+	if (!gpio_request(BEAGLE_GPIO_137, "")) {
+		gpio_direction_output(BEAGLE_GPIO_137, 0);
+	}else{
+		printk(KERN_DEBUG "Miwi: Fail to request GPIO\n");
+	}
+
+	//Beagleboard GPIO requests 141
+	if (!gpio_request(BEAGLE_GPIO_141, "")) {
+		gpio_direction_output(BEAGLE_GPIO_141, 0);
+	}else{
+		printk(KERN_DEBUG "Miwi: Fail to request GPIO\n");
+	}
+
+*/
 	//Init and Register our SPI
 	err = spi_register_driver(&miwi_spi);
 	if (err < 0) {
@@ -180,6 +197,13 @@ static int __init miwi_init(void){
 	}
 	*/
 
+/*
+	//TURN ON GPIO 137 and GPIO 141, This will set the directions (DIR) for the transfer level
+	//chips of the BeagleBoard Tranier board
+	gpio_set_value(BEAGLE_GPIO_137, 0); //Set to Input (3.3V to 1.8V)
+	gpio_set_value(BEAGLE_GPIO_141, 1); //Set to Output (1.8V to 3.3V)
+
+*/
 	return 0;
 }
 
@@ -191,6 +215,10 @@ static void __exit miwi_exit(void){
 	printk(KERN_DEBUG "Miwi: exit\n");
 	
 	gpio_free(BEAGLE_LED_USR1);			 //Created with gpio_request()
+/*
+	gpio_free(BEAGLE_GPIO_137);			 //Created with gpio_request()
+	gpio_free(BEAGLE_GPIO_141);			 //Created with gpio_request()
+*/
 	spi_unregister_device(miwi_dev.miwi_spi_device); //Created with ?????
 	spi_unregister_driver(&miwi_spi); 		 //Created with spi_register_driver()
 
@@ -299,7 +327,7 @@ static int miwi_spi_transfer_message(char * msg_data, size_t len)
 
 	memset(miwi_data.rx_buff, 0, SPI_BUFF_SIZE);
 
-	/* Give allocation pointer in transfer structure */ 
+	/* Give allocation pointer in transfer structure */ 	
 	miwi_data.transfer.tx_buf = miwi_data.tx_buff;
 	miwi_data.transfer.rx_buf = miwi_data.rx_buff;
 	miwi_data.transfer.len = len;
@@ -383,19 +411,14 @@ miwi_read(struct file *file, char __user *buff, size_t count, loff_t *pos)
 
 
 	//TURN ON OR OFF THE LED.
-	if(gpio_requested){
+	value = gpio_get_value(BEAGLE_LED_USR1);
+	if(value){
+		gpio_set_value(BEAGLE_LED_USR1, 0);
+		sprintf(udata, "Miwi:LED_OFF,%d\n", value);
 
-		value = gpio_get_value(BEAGLE_LED_USR1);
-		if(value){
-			gpio_set_value(BEAGLE_LED_USR1, 0);
-			sprintf(udata, "Miwi:LED_OFF,%d\n", value);
-
-		}else{
-			gpio_set_value(BEAGLE_LED_USR1, 1);
-			sprintf(udata, "Miwi:LED_ON,%d\n", value);
-		}		
 	}else{
-		sprintf(udata, "Miwi: Write not avilable due to FAIL request");
+		gpio_set_value(BEAGLE_LED_USR1, 1);
+		sprintf(udata, "Miwi:LED_ON,%d\n", value);	
 	}
 
 	len = strlen(udata);
@@ -418,7 +441,7 @@ static ssize_t
 miwi_write(struct file *file, const char __user *buff, size_t count, loff_t *pos)
 {
 	int retval, ret;
-	char *udata;
+	char *udata,tdata[150];
 	
 	printk(KERN_DEBUG "Miwi: Write \n");
 
@@ -437,9 +460,12 @@ miwi_write(struct file *file, const char __user *buff, size_t count, loff_t *pos
 	udata[count]= '\0';
 	
 	printk(KERN_DEBUG "Miwi: You said: %s, length= %d, count=%d", udata, strlen(udata), count);
+
+	/*Add 1 byte for length of the data before tranfering the data, this is for the frimware*/
+	sprintf(tdata,"%c%s",count,udata);
 	
 	/* SPI Write and Read */	
-	ret= miwi_spi_transfer_message(udata, count);
+	ret= miwi_spi_transfer_message(tdata, count+1);
 
 	if (ret) {
 		printk(KERN_DEBUG "Miwi: miwi_spi_transfer message failed : %d\n",ret);
